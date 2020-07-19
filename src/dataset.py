@@ -28,7 +28,10 @@ class SMILESDataset(Dataset):
         row = self.df.iloc[idx]
         smiles = self.convert(row.SMILES)
         log_p = row.Kow
-        return {"smiles": smiles, "logP": log_p, "mask": np.ones(len(smiles))}
+        return {"smiles": smiles, 
+                "logP": log_p, 
+                "seq_len": len(smiles), 
+                "mask": np.ones(len(smiles))}
 
     def __len__(self):
         return self.df.shape[0]
