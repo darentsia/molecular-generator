@@ -2,7 +2,6 @@ import numpy as np
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
 
-
 PAD_TOK = "X"
 START_TOK = "<"
 END_TOK = ">"
@@ -21,9 +20,10 @@ def create_vocab(df):
 
 
 class SMILESDataset(Dataset):
-
-    def __init__(self, df, vocab):
+    def __init__(self, df, vocab, mean_log_p, std_log_p):
         self.df = df
+        self.mean_log_p = mean_log_p
+        self.std_log_p = std_log_p
         self.char_to_idx = vocab
         self.vocab_size = len(self.char_to_idx)
 
@@ -52,7 +52,7 @@ class SMILESDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         smiles = self.to_idx(row.SMILES)
-        log_p = row.Kow
+        log_p = (row.Kow - self.mean_log_p + 1e-9) / self.std_log_p
         return {
             "smiles": smiles,
             "logP": log_p,
@@ -80,7 +80,9 @@ def make_collate_fn(padding_values):
                 if p:
                     pad_width = [(0, p)] + [(0, 0)] * (batch[n][name].ndim - 1)
                     if padding_value == "edge":
-                        batch[n][name] = np.pad(batch[n][name], pad_width, mode="edge")
+                        batch[n][name] = np.pad(
+                            batch[n][name], pad_width, mode="edge"
+                        )
                     else:
                         batch[n][name] = np.pad(
                             batch[n][name],
