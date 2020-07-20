@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,7 @@ if __name__ == "__main__":
     parser.add_argument("--data", type=str, help="Path to the data file.")
     parser.add_argument("--lr", type=int, default=0.0001, help="Learning rate.")
     parser.add_argument(
-        "--epochs", type=int, default=3000, help="Number of training epochs"
+        "--epochs", type=int, default=50, help="Number of training epochs"
     )
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size."
@@ -58,11 +59,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--warmup", type=int, default=3, help="Number of warmup epochs."
     )
+    parser.add_argument("--out_suff", type=str, help="Suffix added to the saved model name.")
 
     args = parser.parse_args()
 
     seed_everything(13)
-    writer = SummaryWriter("runs/test_run_logP")
+    writer = SummaryWriter("runs/test_run_logP_warmup15")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
@@ -150,6 +152,7 @@ if __name__ == "__main__":
     criterion = torch.nn.CrossEntropyLoss(reduction="none")
 
     best_val_loss = 1000
+    generated_molecules = defaultdict()
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0
@@ -199,6 +202,8 @@ if __name__ == "__main__":
         )
         generated = idx_to_char(output, train_dataset)
         print(generated)
+        generated_molecules[epoch] = generated
+
         writer.add_text("Generated_molecule", to_markdown(generated), epoch)
         writer.add_scalar("train_loss", epoch_loss, epoch)
 
@@ -231,10 +236,13 @@ if __name__ == "__main__":
                 val_loss += loss.item() / len(val_dataset) * len(smiles)
             print(f"Epoch {epoch} validation loss: {val_loss}")
             writer.add_scalar("val_loss", val_loss, epoch)
-            
+
             # Model saving 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                torch.save(model.state_dict(), "best_model.pt")
-
+                torch.save(model.state_dict(), f"best_model_{args.out_suff}.pt")
+                
+    import ipdb; ipdb.set_trace()
+    generated_molecules_df = pd.DataFrame(generated_molecules)
+    generated_molecules_df.to_json("generated_molecules.json")
     import ipdb; ipdb.set_trace()
