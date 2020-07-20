@@ -29,7 +29,6 @@ class ScaledDotProductAttention(nn.Module):
         return attention.matmul(value), attention
 
 
-
 class MultiHeadAttention(nn.Module):
     """Taken from https://github.com/CyberZHG/torch-multi-head-attention/"""
 
@@ -165,11 +164,7 @@ class MultiHeadAttention(nn.Module):
 
 class TransformerDecoderLayer(nn.Module):
     def __init__(
-        self,
-        dmodel,
-        nhead,
-        dim_feedforward=1024,
-        dropout=0.1,
+        self, dmodel, nhead, dim_feedforward=1024, dropout=0.1,
     ):
         super().__init__()
 
@@ -190,13 +185,12 @@ class TransformerDecoderLayer(nn.Module):
         # self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
 
-
     def forward(
         self,
         x,
         # memory,
         # source_attention_mask,
-        target_attention_mask
+        target_attention_mask,
     ):
 
         sequence_length = x.size(1)
@@ -315,7 +309,6 @@ def create_attention_mask(src_sequence_length, tgt_sequence_length):
     return attention_mask
 
 
-
 class Transformer(nn.Module):
     def __init__(
         self,
@@ -355,10 +348,7 @@ class Transformer(nn.Module):
         self.decoder_layers = nn.ModuleList(
             [
                 TransformerDecoderLayer(
-                    dmodel,
-                    nhead,
-                    dim_feedforward=dim_feedforward,
-                    dropout=dropout
+                    dmodel, nhead, dim_feedforward=dim_feedforward, dropout=dropout
                 )
                 for _ in range(decoder_layers)
             ]
@@ -366,7 +356,6 @@ class Transformer(nn.Module):
 
         # self.classifier = nn.Linear(dmodel, num_classes)
         self.classifier = nn.Linear(dmodel, vocab_size)
-
 
     # def _make_go_frame(
     #     self, batch_size: int, input_size: int, device: Union[str, torch.device]
@@ -401,7 +390,7 @@ class Transformer(nn.Module):
         decoder_encoder_alignments = []
         for decoder_layer in self.decoder_layers:
             # x, decoder_alignment, decoder_encoder_alignment = decoder_layer(
-            x, decoder_alignment  = decoder_layer(
+            x, decoder_alignment = decoder_layer(
                 x,
                 # memory,
                 # source_attention_mask,
@@ -413,7 +402,6 @@ class Transformer(nn.Module):
         # return x, decoder_alignments, decoder_encoder_alignments
         return x, decoder_alignments
 
-
     # def _encode_input_ids(self, input_ids):
 
     #     input_embeddings = self.embedding(input_ids)
@@ -423,7 +411,6 @@ class Transformer(nn.Module):
     #     return input_embeddings
 
     def _encode_output_ids(self, output_ids):
-
         target_embeddings = self.embedding(output_ids)
         # target_embeddings = self.embedding_proj(target_embeddings)
         target_embeddings = self.positional_encoding(target_embeddings)
@@ -472,7 +459,7 @@ class Transformer(nn.Module):
             # encoder_alignments=encoder_alignments,
             decoder_alignments=decoder_alignments,
             # decoder_encoder_alignments=decoder_encoder_alignments,
-            target_embeddings=target_embeddings
+            target_embeddings=target_embeddings,
         )
 
     @torch.no_grad()
@@ -485,7 +472,7 @@ class Transformer(nn.Module):
         start_id,
         device,
         temperature=1.0,
-        # mask_ids=(),
+        mask_ids=(),
     ):
 
         # batch_size = input_ids.size(0)
@@ -506,9 +493,7 @@ class Transformer(nn.Module):
             # target_sequence_length = torch.zeros_like(
             #     source_sequence_length, device=device
             # )
-            target_sequence_length = torch.zeros(
-                batch_size, device=device
-            )
+            target_sequence_length = torch.zeros(batch_size, device=device).long()
             target_sequence_length.fill_(step)
 
             decoder_mask = create_self_attention_mask(
@@ -518,21 +503,23 @@ class Transformer(nn.Module):
             #     source_sequence_length, target_sequence_length
             # )
 
-            target_embeddings = self._encode_input_ids(output_ids)
+            target_embeddings = self._encode_output_ids(output_ids)
 
             # (decoded, decoder_alignments, decoder_encoder_alignments,) = self._decode(
             (decoded, decoder_alignments,) = self._decode(
                 target_embeddings,
                 # memory=encoded,
                 # source_attention_mask=encoder_decoder_mask,
-                target_attention_mask=decoder_mask
+                target_attention_mask=decoder_mask,
             )
 
             last_decoded = decoded[:, -1, :]
-            last_logits = self.classifier(last_decoded) # [b_s, (seq_len==1), vocab_size]
+            last_logits = self.classifier(
+                last_decoded
+            )  # [b_s, (seq_len==1), vocab_size]
 
-            # for mask_id in mask_ids:
-            #     last_logits[:, mask_id] = -1e9
+            for mask_id in mask_ids:
+                last_logits[:, mask_id] = -1e9
 
             probs = torch.softmax(last_logits / temperature, dim=1)
             choices = torch.multinomial(probs, num_samples=1)
