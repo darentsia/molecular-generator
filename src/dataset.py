@@ -27,6 +27,10 @@ class SMILESDataset(Dataset):
         self.char_to_idx = vocab
         self.vocab_size = len(self.char_to_idx)
 
+        self.pad_tok = PAD_TOK
+        self.start_tok = START_TOK
+        self.end_tok = END_TOK
+
         self.pad_idx = self.char_to_idx[PAD_TOK]
         self.start_idx = self.char_to_idx[START_TOK]
         self.end_idx = self.char_to_idx[END_TOK]
