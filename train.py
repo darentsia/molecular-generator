@@ -13,24 +13,38 @@ from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 
+def strip_molecule(molecule, end_tok):
+    head, *tails = molecule.split(end_tok)
+    return head[1:]
+
+
 def idx_to_char(output, train_dataset):
-    molecules = output["output_ids"].numpy()
+    molecules = output["output_ids"].cpu().numpy()
     char_molecules = []
     for idxes in molecules:
-        molecule = "".join([train_dataset.idx_to_char[idx] for idx in idxes])
+        if train_dataset.end_idx not in idxes:
+            continue
+        molecule = "".join(train_dataset.idx_to_char[idx] for idx in idxes)
+        molecule = strip_molecule(molecule, end_tok=train_dataset.end_tok)
         char_molecules.append(molecule)
     return char_molecules
+
+
+def to_html(output):
+    df = pd.DataFrame({"Molecules": output})
+    html_str = df.to_markdown()
+    return html_str
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, help="Path to the data file.")
-    parser.add_argument("--lr", type=int, default=0.01, help="Learning rate.")
+    parser.add_argument("--lr", type=int, default=0.001, help="Learning rate.")
     parser.add_argument(
-        "--epochs", type=int, default=30, help="Number of training epochs"
+        "--epochs", type=int, default=3000, help="Number of training epochs"
     )
-    parser.add_argument("--batch_size", type=int, default=512, help="Batch size.")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
     parser.add_argument(
         "--accumulation", type=int, default=1, help="Number of accumulation steps.",
     )
@@ -41,10 +55,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     seed_everything(13)
-    writer = SummaryWriter("runs/test_run")
+    writer = SummaryWriter("runs/test_run_3")
 
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     print("Using device:", device)
     print()
 
@@ -60,7 +74,7 @@ if __name__ == "__main__":
         )
 
     df = pd.read_csv(args.data)
-    df = df.sample(2000)
+    df = df.sample(100)
     train, test_val = train_test_split(df, test_size=0.1)
     test, val = train_test_split(test_val, test_size=0.5)
 
@@ -76,6 +90,8 @@ if __name__ == "__main__":
         train_dataset,
         batch_size=args.batch_size,
         collate_fn=make_collate_fn(padding_values=train_dataset.padding_values),
+        shuffle=True,
+        drop_last=True
     )
 
     val_dataset = SMILESDataset(val, vocab)
@@ -94,25 +110,27 @@ if __name__ == "__main__":
 
     model = Transformer(
         vocab_size=train_dataset.vocab_size,
-        dmodel=64,  # 512
+        dmodel=512,  # 512
         nhead=8,
-        decoder_layers=3,  # 6
-        dim_feedforward=256,  # 1024
+        decoder_layers=6,  # 6
+        dim_feedforward=1024,  # 1024
         dropout=0.1,
         num_positions=1024,
     )
     model.to(device)
 
     optimizer = configure_optimizer(model.named_parameters(), args.lr)
+    steps_per_epoch = len(train_dataset) / (args.batch_size * args.accumulation)
     scheduler = configure_scheduler(
         optimizer,
         training_steps=(
-            args.epochs * len(train_dataset) / (args.batch_size * args.accumulation)
+            args.epochs * steps_per_epoch
         ),
-        warmup=args.warmup,
+        warmup=args.warmup * steps_per_epoch
     )
     criterion = torch.nn.CrossEntropyLoss(reduction="none")
     for epoch in range(args.epochs):
+        model.train()
         epoch_loss = 0
         for batch in tqdm(train_loader, total=len(train_loader), ncols=80):
             optimizer.zero_grad()
@@ -136,19 +154,23 @@ if __name__ == "__main__":
                 )
                 / target_sequence_length
             )
-            epoch_loss += loss.item() / len(train_loader)
+            epoch_loss += loss.item() / len(train_dataset) * len(smiles)
             loss.backward()
             optimizer.step()
             scheduler.step()
         print(f"Epoch {epoch} loss: {epoch_loss}")
+        model.eval()
         output = model.generate(
             batch_size=4,
-            max_target_sequence_length=20,
+            max_target_sequence_length=50,
             start_id=train_dataset.start_idx,
             device=device,
             mask_ids=(train_dataset.pad_idx, train_dataset.start_idx),
+            temperature=1.0
         )
-        print(idx_to_char(output, train_dataset))
+        generated = idx_to_char(output, train_dataset)
+        print(generated)
+        writer.add_text("Generated_molecule", to_html(generated), epoch)
         writer.add_scalar("train_loss", epoch_loss, epoch)
 
         # Validation
@@ -175,13 +197,13 @@ if __name__ == "__main__":
                     )
                     / target_sequence_length
                 )
-                val_loss += loss.item() / len(val_loader)
+                val_loss += loss.item() / len(val_dataset) * len(smiles)
             print(f"Epoch {epoch} validation loss: {val_loss}")
             writer.add_scalar("val_loss", val_loss, epoch)
 
     output = model.generate(
         batch_size=4,
-        max_target_sequence_length=20,
+        max_target_sequence_length=50,
         start_id=train_dataset.start_idx,
         device=device,
         mask_ids=(train_dataset.pad_idx, train_dataset.start_idx),
