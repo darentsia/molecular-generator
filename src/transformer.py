@@ -73,7 +73,9 @@ class MultiHeadAttention(nn.Module):
     @staticmethod
     def create_causal_mask(x=None, batch_size=None, seq_len=None, device=None):
         if x is None and batch_size is None and seq_len is None:
-            raise ValueError("Please provide either tensor or shape parameters.")
+            raise ValueError(
+                "Please provide either tensor or shape parameters."
+            )
         if x is not None:
             batch_size, seq_len, dmodel = x.size()
 
@@ -121,76 +123,36 @@ class MultiHeadAttention(nn.Module):
         )
 
 
-# class TransformerEncoderLayer(nn.Module):
-#     def __init__(
-#         self,
-#         dmodel,
-#         nhead,
-#         dim_feedforward=1024,
-#         dropout=0.1,
-#     ):
-#         super().__init__()
-
-#         self.attention = MultiHeadAttention(dmodel, nhead)
-
-#         self.feedforward = nn.Sequential(
-#             nn.Linear(dmodel, dim_feedforward),
-#             nn.ReLU(),
-#             nn.Dropout(dropout),
-#             nn.Linear(dim_feedforward, dmodel),
-#         )
-
-#         self.norm1 = nn.LayerNorm(dmodel)
-#         self.norm2 = nn.LayerNorm(dmodel)
-#         self.dropout1 = nn.Dropout(dropout)
-#         self.dropout2 = nn.Dropout(dropout)
-
-#     def forward(self, x, attention_mask):
-
-#         # attention
-#         shortcut, alignments = self.attention(x, x, x, mask=attention_mask)
-#         x = x + self.dropout1(shortcut)
-#         x = self.norm1(x)
-
-#         # feedforward
-#         shortcut = self.feedforward(x)
-
-#         # post
-#         x = x + self.dropout2(shortcut)
-#         x = self.norm2(x)
-
-#         return x, alignments
-
-
 class TransformerDecoderLayer(nn.Module):
     def __init__(
-        self, dmodel, nhead, dim_feedforward=1024, dropout=0.1,
+        self,
+        dmodel,
+        nhead,
+        dim_feedforward=1024,
+        dropout=0.1,
+        n_conditional_channels=0,
     ):
         super().__init__()
 
         self.decoder_attention = MultiHeadAttention(dmodel, nhead)
-        # self.encoder_decoder_attention = MultiHeadAttention(dmodel, nhead)
 
         self.feedforward = nn.Sequential(
-            nn.Linear(dmodel, dim_feedforward),
+            nn.Linear(dmodel + n_conditional_channels, dim_feedforward),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(dim_feedforward, dmodel),
         )
 
         self.norm1 = nn.LayerNorm(dmodel)
-        # self.norm2 = nn.LayerNorm(dmodel)
-        self.norm3 = nn.LayerNorm(dmodel)
+        self.norm2 = nn.LayerNorm(dmodel)
         self.dropout1 = nn.Dropout(dropout)
-        # self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
 
     def forward(
         self,
         x,
-        # memory,
-        # source_attention_mask,
         target_attention_mask,
+        log_p,
     ):
 
         sequence_length = x.size(1)
@@ -202,20 +164,19 @@ class TransformerDecoderLayer(nn.Module):
         x = x + self.dropout1(shortcut)
         x = self.norm1(x)
 
-        # src attention
-        # shortcut, src_tgt_alignments = self.encoder_decoder_attention(
-        #     x, memory, memory, mask=source_attention_mask
-        # )
-        # x = x + self.dropout2(shortcut)
-        # x = self.norm2(x)
+        ff_inps = [x]
+        if log_p is not None:
+            log_p = log_p.unsqueeze(1).repeat(1, sequence_length).unsqueeze(-1)
+            ff_inps.append(log_p)
 
-        shortcut = self.feedforward(x)
+        ff_inps = torch.cat(ff_inps, dim=-1)
+
+        shortcut = self.feedforward(ff_inps)
 
         # post
-        x = x + self.dropout3(shortcut)
-        x = self.norm3(x)
+        x = x + self.dropout2(shortcut)
+        x = self.norm2(x)
 
-        # return x, tgt_alignments, src_tgt_alignments
         return x, tgt_alignments
 
 
@@ -315,150 +276,90 @@ class Transformer(nn.Module):
         vocab_size,
         dmodel,
         nhead,
-        # embeddings,
-        # encoder_layers,
         decoder_layers,
-        # num_classes,
         dim_feedforward=1024,
         dropout=0.1,
         num_positions=1024,
+        n_conditional_channels=0,
     ):
         super().__init__()
 
         self.dmodel = dmodel
 
-        # self.embedding = nn.Embedding.from_pretrained(embeddings, freeze=True)
-        self.embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=dmodel)
-        # self.embedding_proj = nn.Linear(
-        #     self.embedding.embedding_dim, dmodel, bias=False
-        # )
+        self.embedding = nn.Embedding(
+            num_embeddings=vocab_size, embedding_dim=dmodel
+        )
 
-        self.positional_encoding = SinusoidalPositionalEmbedding(dmodel, num_positions)
-        # self.encoder_layers = nn.ModuleList(
-        #     [
-        #         TransformerEncoderLayer(
-        #             dmodel,
-        #             nhead,
-        #             dim_feedforward=dim_feedforward,
-        #             dropout=dropout,
-        #         )
-        #         for _ in range(encoder_layers)
-        #     ]
-        # )
+        self.positional_encoding = SinusoidalPositionalEmbedding(
+            dmodel, num_positions
+        )
+
         self.decoder_layers = nn.ModuleList(
             [
                 TransformerDecoderLayer(
-                    dmodel, nhead, dim_feedforward=dim_feedforward, dropout=dropout
+                    dmodel,
+                    nhead,
+                    dim_feedforward=dim_feedforward,
+                    dropout=dropout,
+                    n_conditional_channels=n_conditional_channels,
                 )
                 for _ in range(decoder_layers)
             ]
         )
 
-        # self.classifier = nn.Linear(dmodel, num_classes)
         self.classifier = nn.Linear(dmodel, vocab_size)
-
-    # def _make_go_frame(
-    #     self, batch_size: int, input_size: int, device: Union[str, torch.device]
-    # ) -> torch.Tensor:
-    #     return torch.zeros(batch_size, 1, input_size, device=device)
-
-    # def _remove_last_frame(self, inputs: torch.Tensor) -> torch.Tensor:
-    #     return inputs[:, :-1, :]
-
-    # def _add_go_frame(
-    #     self, inputs: torch.Tensor, go_frame: torch.Tensor
-    # ) -> torch.Tensor:
-    #     return torch.cat((go_frame, inputs), dim=1)
-
-    # def encode(self, x, source_attention_mask):
-    #     encoder_alignments = []
-    #     for encoder_layer in self.encoder_layers:
-    #         x, alignments = encoder_layer(x, source_attention_mask)
-    #         encoder_alignments.append(alignments)
-
-    #     return x, encoder_alignments
 
     def _decode(
         self,
         x,
-        # memory,
-        # source_attention_mask,
         target_attention_mask,
+        log_p=None,
     ):
 
         decoder_alignments = []
         decoder_encoder_alignments = []
         for decoder_layer in self.decoder_layers:
-            # x, decoder_alignment, decoder_encoder_alignment = decoder_layer(
             x, decoder_alignment = decoder_layer(
                 x,
-                # memory,
-                # source_attention_mask,
                 target_attention_mask,
+                log_p,
             )
             decoder_alignments.append(decoder_alignment)
-            # decoder_encoder_alignments.append(decoder_encoder_alignment)
 
-        # return x, decoder_alignments, decoder_encoder_alignments
         return x, decoder_alignments
-
-    # def _encode_input_ids(self, input_ids):
-
-    #     input_embeddings = self.embedding(input_ids)
-    #     input_embeddings = self.embedding_proj(input_embeddings)
-    #     input_embeddings = self.positional_encoding(input_embeddings)
-
-    #     return input_embeddings
 
     def _encode_output_ids(self, output_ids):
         target_embeddings = self.embedding(output_ids)
-        # target_embeddings = self.embedding_proj(target_embeddings)
         target_embeddings = self.positional_encoding(target_embeddings)
 
         return target_embeddings
 
     def forward(
         self,
-        # input_ids,
         output_ids,
-        # source_sequence_length,
         target_sequence_length,
+        log_p=None,
     ):
 
-        # batch_size = input_ids.size(0)
         batch_size = output_ids.size(0)
 
-        # input_embeddings = self._encode_input_ids(input_ids)
-
-        # encoder_mask = create_self_attention_mask(source_sequence_length)
-        # encoded, encoder_alignments = self.encode(
-        #     input_embeddings, encoder_mask
-        # )
-
-        # target_embeddings = self._encode_input_ids(output_ids)
         target_embeddings = self._encode_output_ids(output_ids)
 
-        decoder_mask = create_self_attention_mask(target_sequence_length, causal=True)
-        # encoder_decoder_mask = create_attention_mask(
-        #     source_sequence_length, target_sequence_length
-        # )
+        decoder_mask = create_self_attention_mask(
+            target_sequence_length, causal=True
+        )
 
-        # (decoded, decoder_alignments, decoder_encoder_alignments,) = self._decode(
         (decoded, decoder_alignments,) = self._decode(
             target_embeddings,
-            # memory=encoded,
-            # source_attention_mask=encoder_decoder_mask,
             target_attention_mask=decoder_mask,
+            log_p=log_p,
         )
 
         logits = self.classifier(decoded)
 
         return dict(
             logits=logits,
-            # memory=encoded,
-            # encoder_alignments=encoder_alignments,
             decoder_alignments=decoder_alignments,
-            # decoder_encoder_alignments=decoder_encoder_alignments,
             target_embeddings=target_embeddings,
         )
 
@@ -466,51 +367,34 @@ class Transformer(nn.Module):
     def generate(
         self,
         batch_size,
-        # input_ids,
-        # source_sequence_length,
         max_target_sequence_length,
         start_id,
         device,
         temperature=1.0,
         mask_ids=(),
+        log_p=None,
     ):
-
-        # batch_size = input_ids.size(0)
-        # device = input_ids.device
-
-        # input_embeddings = self._encode_input_ids(input_ids)
-
-        # encoder_mask = create_self_attention_mask(source_sequence_length)
-        # encoded, encoder_alignments = self.encode(
-        #     input_embeddings, encoder_mask
-        # )
 
         output_ids = torch.zeros(batch_size, device=device).long()
         output_ids.fill_(start_id).unsqueeze_(1)
 
         for step in range(1, max_target_sequence_length):
 
-            # target_sequence_length = torch.zeros_like(
-            #     source_sequence_length, device=device
-            # )
-            target_sequence_length = torch.zeros(batch_size, device=device).long()
+            target_sequence_length = torch.zeros(
+                batch_size, device=device
+            ).long()
             target_sequence_length.fill_(step)
 
             decoder_mask = create_self_attention_mask(
                 target_sequence_length, causal=True
             )
-            # encoder_decoder_mask = create_attention_mask(
-            #     source_sequence_length, target_sequence_length
-            # )
 
             target_embeddings = self._encode_output_ids(output_ids)
 
-            # (decoded, decoder_alignments, decoder_encoder_alignments,) = self._decode(
             (decoded, decoder_alignments,) = self._decode(
                 target_embeddings,
-                # memory=encoded,
-                # source_attention_mask=encoder_decoder_mask,
                 target_attention_mask=decoder_mask,
+                log_p=log_p,
             )
 
             last_decoded = decoded[:, -1, :]
@@ -528,5 +412,4 @@ class Transformer(nn.Module):
 
         return dict(
             output_ids=output_ids,
-            # decoder_encoder_alignments=decoder_encoder_alignments,
         )
