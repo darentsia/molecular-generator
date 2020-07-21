@@ -21,16 +21,18 @@ def strip_molecule(molecule, end_tok):
     return head[1:]
 
 
-def idx_to_char(output, train_dataset):
+def idx_to_char(output, train_dataset, sample_log_p):
     molecules = output["output_ids"].cpu().numpy()
     char_molecules = []
-    for idxes in molecules:
+    valid_log_p = []
+    for idxes, log_p in zip(molecules, sample_log_p):
         if train_dataset.end_idx not in idxes:
             continue
         molecule = "".join(train_dataset.idx_to_char[idx] for idx in idxes)
         molecule = strip_molecule(molecule, end_tok=train_dataset.end_tok)
         char_molecules.append(molecule)
-    return char_molecules
+        valid_log_p.append(log_p)
+    return char_molecules, valid_log_p
 
 
 def to_markdown(output):
@@ -197,7 +199,7 @@ if __name__ == "__main__":
             start_id=train_dataset.start_idx,
             device=device,
             mask_ids=(train_dataset.pad_idx, train_dataset.start_idx),
-            temperature=1.0,
+            temperature=0.5,
             log_p=sample_log_p,
         )
         generated = idx_to_char(output, train_dataset)
